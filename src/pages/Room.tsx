@@ -3,24 +3,19 @@ import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Mic, MicOff, Video, VideoOff, PhoneOff, Copy } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
-
-interface Peer {
-  id: string;
-  username: string;
-  stream?: MediaStream;
-}
+import { useWebRTC } from "@/hooks/useWebRTC";
+import { ChatPanel } from "@/components/ChatPanel";
 
 const Room = () => {
   const { roomId } = useParams();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
-  const [peers, setPeers] = useState<Peer[]>([]);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  const channelRef = useRef<any>(null);
+  
+  const { peers, channel } = useWebRTC(roomId, username, localStream);
 
   useEffect(() => {
     const storedUsername = sessionStorage.getItem("username");
@@ -29,9 +24,7 @@ const Room = () => {
       return;
     }
     setUsername(storedUsername);
-
     initializeMedia();
-    setupRealtimeChannel(storedUsername);
 
     return () => {
       cleanup();
@@ -54,52 +47,9 @@ const Room = () => {
     }
   };
 
-  const setupRealtimeChannel = (username: string) => {
-    const channel = supabase.channel(`room:${roomId}`);
-
-    channel
-      .on("presence", { event: "sync" }, () => {
-        const state = channel.presenceState();
-        const allPeers: Peer[] = [];
-        Object.values(state).forEach((presences: any) => {
-          presences.forEach((presence: any) => {
-            if (presence.username !== username) {
-              allPeers.push({
-                id: presence.id,
-                username: presence.username,
-              });
-            }
-          });
-        });
-        setPeers(allPeers);
-      })
-      .on("presence", { event: "join" }, ({ newPresences }: any) => {
-        console.log("User joined:", newPresences);
-        toast.success(`${newPresences[0]?.username || "User"} joined`);
-      })
-      .on("presence", { event: "leave" }, ({ leftPresences }: any) => {
-        console.log("User left:", leftPresences);
-        toast.info(`${leftPresences[0]?.username || "User"} left`);
-      })
-      .subscribe(async (status) => {
-        if (status === "SUBSCRIBED") {
-          await channel.track({
-            id: Math.random().toString(36).substring(7),
-            username,
-            online_at: new Date().toISOString(),
-          });
-        }
-      });
-
-    channelRef.current = channel;
-  };
-
   const cleanup = () => {
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop());
-    }
-    if (channelRef.current) {
-      channelRef.current.unsubscribe();
     }
   };
 
@@ -191,11 +141,26 @@ const Room = () => {
           {peers.map((peer) => (
             <div
               key={peer.id}
-              className="relative rounded-xl overflow-hidden bg-secondary flex items-center justify-center"
+              className="relative rounded-xl overflow-hidden bg-secondary"
             >
-              <div className="text-6xl text-muted-foreground">
-                {peer.username.charAt(0).toUpperCase()}
-              </div>
+              {peer.stream ? (
+                <video
+                  autoPlay
+                  playsInline
+                  ref={(video) => {
+                    if (video && peer.stream) {
+                      video.srcObject = peer.stream;
+                    }
+                  }}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center">
+                  <div className="text-6xl text-muted-foreground">
+                    {peer.username.charAt(0).toUpperCase()}
+                  </div>
+                </div>
+              )}
               <div className="absolute bottom-4 left-4 px-3 py-1 rounded-md bg-black/50 text-white text-sm backdrop-blur-sm">
                 {peer.username}
               </div>
@@ -241,6 +206,9 @@ const Room = () => {
           <PhoneOff className="h-5 w-5" />
         </Button>
       </div>
+
+      {/* Chat Panel */}
+      {channel && <ChatPanel channel={channel} username={username} />}
     </div>
   );
 };
